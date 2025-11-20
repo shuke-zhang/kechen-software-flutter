@@ -8,10 +8,10 @@ const String _kApiBase = String.fromEnvironment(
   defaultValue: 'http://192.168.3.22:11020',
 );
 
-class DioClient {
-  DioClient._();
-  static final DioClient _i = DioClient._();
-  factory DioClient() => _i;
+class Request {
+  Request._();
+  static final Request _i = Request._();
+  factory Request() => _i;
 
   late final Dio dio = _create();
 

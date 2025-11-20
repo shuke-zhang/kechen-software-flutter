@@ -1,14 +1,16 @@
 // lib/features/home/home_page.dart
 
+import 'dart:async';
 import 'dart:convert';
 
+import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:video_player/video_player.dart';
 
 import 'package:kechen_software_flutter/api/ws_service.dart';
-import 'package:kechen_software_flutter/utils/device_id.dart'; // 如果是 utils 目录，请改成 ../../utils/device_id.dart
+import 'package:kechen_software_flutter/utils/device_id.dart';
 import 'package:kechen_software_flutter/core/log/app_logger.dart';
+import 'package:kechen_software_flutter/core/player/system_video_player.dart';
 
 /// 设备状态
 /// - notConnected 初始状态：还没开始连服务器（默认值）
@@ -37,7 +39,7 @@ enum DeviceStatus {
   offline,
 }
 
-/// 一条状态文案 + 对应状态
+/// 一条状态文案 + 对应状态（目前没在 UI 用到，先保留）
 class StatusItem {
   final String text;
   final DeviceStatus status;
@@ -56,28 +58,46 @@ class _HomePageState extends State<HomePage> {
   /// WebSocket 服务（单例）
   final WsService _ws = WsService();
 
-  /// 状态枚举，比如：空闲、播放中、离线
-
   /// WebSocket 地址
   static const String _wsUrl = 'ws://192.168.3.22:11020/ws/device';
 
-  /// 所有可选状态短句
-  final List<StatusItem> _statusList = const [
-    StatusItem(text: '未连接', status: DeviceStatus.notConnected),
-    StatusItem(text: '设备空闲中，等待任务下发', status: DeviceStatus.idle),
-    StatusItem(text: '正在连接服务器...', status: DeviceStatus.connecting),
-    StatusItem(text: '已连接服务器，等待指令', status: DeviceStatus.connected),
-    StatusItem(text: '正在播放服务器下发的视频', status: DeviceStatus.playing),
-    StatusItem(text: '设备离线，请检查网络与服务端', status: DeviceStatus.offline),
-  ];
-
-  String _log = '今天天气怎么样\n';
   String? _androidId;
 
-  /// 当前设备状态（默认：离线 / 未连接）
+  /// 当前设备状态（默认：未连接）
   DeviceStatus _deviceStatus = DeviceStatus.notConnected;
 
-  /// 根据当前状态返回对应的文案
+  /// 简单的任务队列：存视频 URL
+  final List<String> _taskQueue = <String>[];
+
+  /// 本次下发任务的总数量（用于显示 1/3 这种）
+  int _totalTasks = 0;
+
+  /// 已播放数量 = 总数 - 队列剩余
+  int get _playedCount {
+    return (_totalTasks - _taskQueue.length).clamp(0, _totalTasks);
+  }
+
+  /// 播放按钮的文案
+  String get _playButtonText {
+    if (_totalTasks <= 0) {
+      return '播放';
+    }
+
+    if (_totalTasks == 1) {
+      // 只有一条，不显示进度
+      return '播放';
+    }
+
+    if (_taskQueue.isEmpty) {
+      // 全部播完了
+      return '播放（$_totalTasks/$_totalTasks）';
+    }
+
+    final int currentIndex = (_playedCount + 1).clamp(1, _totalTasks);
+    return '播放（$currentIndex/$_totalTasks）';
+  }
+
+  /// 根据当前状态返回对应的文案（居中显示）
   String get _statusText {
     switch (_deviceStatus) {
       case DeviceStatus.notConnected:
@@ -91,7 +111,7 @@ class _HomePageState extends State<HomePage> {
       case DeviceStatus.idle:
         return '已连接，等待任务下发';
       case DeviceStatus.playing:
-        return '正在播放服务器下发的视频';
+        return '正在播放服务器下发的视频（系统播放器）';
     }
   }
 
@@ -102,16 +122,9 @@ class _HomePageState extends State<HomePage> {
     });
   }
 
-  /// 视频播放器
-  VideoPlayerController? _player;
-  List<String> _playList = [];
-  int _playIndex = 0;
-
-  /// 日志追加
+  /// 日志追加（目前主要打到 logger）
   void _append(String s) {
-    setState(() {
-      _log += '$s\n';
-    });
+    appLogger.d(s);
   }
 
   /// 获取 ANDROID_ID（用你封装的 getAndroidId）
@@ -121,7 +134,7 @@ class _HomePageState extends State<HomePage> {
     }
 
     try {
-      final id = await getAndroidId();
+      final String id = await getAndroidId();
       _androidId = id;
       _append('【ANDROID_ID】$id');
       setState(() {});
@@ -132,35 +145,57 @@ class _HomePageState extends State<HomePage> {
 
   /// 处理 WebSocket 收到的消息
   void _handleWsMessage(dynamic raw) {
-    final text = raw.toString();
+    final String text = raw.toString();
     _append('【<=】$text');
 
     try {
-      final msg = jsonDecode(text);
-      final action = msg['action'];
-      appLogger.d('🛜 收到消息 $raw');
+      final Map<String, dynamic> msg = jsonDecode(text) as Map<String, dynamic>;
+      final String? action = msg['action'] as String?;
+      appLogger.d('🛜 收到消息 $msg');
 
-      if (msg['action'] == 'connected') {
+      // 注册成功
+      if (action == 'connected') {
         appLogger.i('注册成功');
         _setStatus(DeviceStatus.idle);
+        _append('✅ 设备注册成功，等待任务下发');
+        return;
       }
 
+      // 下发视频任务
       if (action == 'publishVideo') {
         appLogger.i('视频下发成功');
 
-        final rawUrls = msg['data']['videoUrls'] as String;
+        final Map<String, dynamic>? data = msg['data'] as Map<String, dynamic>?;
+        final String rawUrls = data?['videoUrls'] as String? ?? '';
 
-        final urls =
+        final List<String> urls =
             rawUrls
                 .split(',')
-                .map((e) => e.trim())
-                .where((e) => e.isNotEmpty)
+                .map((String e) => e.trim())
+                .where((String e) => e.isNotEmpty)
                 .toList();
 
-        _append('【收到视频列表】$urls');
-        _playVideos(urls);
+        if (urls.isEmpty) {
+          _append('【视频错误】下发的视频列表为空');
+          return;
+        }
+
+        setState(() {
+          _taskQueue
+            ..clear()
+            ..addAll(urls);
+          _totalTasks = urls.length;
+        });
+
+        _append('【任务队列】接收 ${urls.length} 条视频任务');
+        appLogger.i('任务队列：$_taskQueue');
+
+        // 自动先播第一条
+        _playNextFromQueue();
+        return;
       }
-    } catch (e) {
+    } catch (e, s) {
+      appLogger.e('解析消息失败', error: e, stackTrace: s);
       _append('【JSON 解析错误】$e');
     }
   }
@@ -176,34 +211,23 @@ class _HomePageState extends State<HomePage> {
     await _ws.connect(
       url: _wsUrl,
       onMessage: _handleWsMessage,
-      // ⭐ 1. 正在连接
       onConnecting: () {
         _append('🛜 已发起连接');
         appLogger.i('🛜 已发起连接');
         _setStatus(DeviceStatus.connecting);
       },
-
-      // ⭐ 2. 底层 WebSocket 已连上
       onConnected: () async {
         _append('✅ 底层 WebSocket 已连接，准备注册设备');
         appLogger.i('✅ 底层 WebSocket 已连接，准备注册设备');
         _setStatus(DeviceStatus.connected);
-
-        // 立刻发注册消息
         await _register();
       },
-
-      // ⭐ 3. 被断开 / 失败 / 重连期间都会触发
       onDisconnected: () {
         _append('⚠️ 连接已断开');
         appLogger.i('⚠️ 连接已断开');
         _setStatus(DeviceStatus.offline);
       },
     );
-
-    // _append('🛜 已发起连接');
-    // await _ensureAndroidId();
-    // _register(); // 发送注册
   }
 
   /// 向服务器注册设备 ID
@@ -215,113 +239,277 @@ class _HomePageState extends State<HomePage> {
 
     await _ensureAndroidId();
 
-    final payload = {
+    final Map<String, dynamic> payload = <String, dynamic>{
       'action': 'register',
-      'data': {'deviceId': _androidId},
+      'data': <String, dynamic>{'deviceId': _androidId},
     };
 
-    final msg = jsonEncode(payload);
+    final String msg = jsonEncode(payload);
     _ws.send(msg);
 
     _append('【=>】register: $msg');
-  }
-
-  /// 发送 ping
-  void _sendPing() {
-    if (!_ws.isConnected) {
-      _append('【提示】未连接，无法发送 ping');
-      return;
-    }
-    _ws.send('ping');
-    _append('【=>】ping');
   }
 
   /// 主动断开
   void _disconnect() {
     _ws.close();
     _append('【OK】已断开');
-    setState(() {});
+    _setStatus(DeviceStatus.offline);
   }
 
-  /// 播放一组视频
-  Future<void> _playVideos(List<String> urls) async {
-    if (urls.isEmpty) {
-      _append('【提示】视频列表为空');
+  /// 从任务队列里取下一条，用系统播放器播放
+  Future<void> _playNextFromQueue() async {
+    if (_taskQueue.isEmpty) {
+      _append('【任务队列】当前无任务');
+      _setStatus(DeviceStatus.idle);
       return;
     }
 
-    _playList = urls;
-    _playIndex = 0;
-    await _startPlay();
+    final String url = _taskQueue.removeAt(0);
+
+    _setStatus(DeviceStatus.playing);
+
+    _append('【系统播放视频】$url');
+    appLogger.i('使用系统播放器播放：$url');
+
+    try {
+      await SystemVideoPlayer.open(
+        'http://192.168.3.174:8080/chat-screensaver-safe-1.mp4',
+      );
+    } catch (e, s) {
+      appLogger.e('打开系统播放器失败', error: e, stackTrace: s);
+      _append('【视频错误】打开系统播放器失败：$e');
+      _setStatus(DeviceStatus.idle);
+    }
   }
 
-  /// 播放当前索引的视频
-  Future<void> _startPlay() async {
-    if (_playIndex < 0 || _playIndex >= _playList.length) {
-      _append('【错误】播放索引越界');
-      return;
-    }
+  /// 生成报告（调用后端接口）
+  Future<void> _generateReport() async {
+    try {
+      appLogger.i('开始请求生成报告接口');
 
-    final url = _playList[_playIndex];
-    _append('【播放视频】$url');
+      // TODO: 把下面这个 URL 换成你自己后端的地址
+      const String apiUrl = 'http://192.168.3.22:11020/api/report/generate';
 
-    _player?.dispose();
-    _player = VideoPlayerController.networkUrl(Uri.parse(url));
+      final Dio dio = Dio();
 
-    await _player!.initialize();
-    await _player!.play();
+      final String id = _androidId ?? '';
 
-    _player!.addListener(() {
-      final v = _player!.value;
-      if (v.isInitialized && v.position >= v.duration && !v.isPlaying) {
-        _playNext();
+      final Response<dynamic> res = await dio.post<dynamic>(
+        apiUrl,
+        data: <String, dynamic>{'deviceId': id},
+      );
+
+      appLogger.i('报告生成接口返回: ${res.data}');
+
+      if (!mounted) {
+        return;
       }
-    });
 
-    setState(() {});
-  }
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(const SnackBar(content: Text('已请求生成报告')));
+    } catch (e, s) {
+      appLogger.e('生成报告失败', error: e, stackTrace: s);
 
-  /// 播放下一个视频
-  void _playNext() {
-    if (_playIndex + 1 >= _playList.length) {
-      _append('【播放完成】无更多视频');
-      return;
+      if (!mounted) {
+        return;
+      }
+
+      ScaffoldMessenger.of(
+        context,
+      ).showSnackBar(SnackBar(content: Text('报告生成失败：$e')));
     }
-
-    _playIndex++;
-    _startPlay();
   }
 
+  StreamSubscription? _playerExitSub;
   @override
   void initState() {
     super.initState();
-
     _ensureAndroidId();
+    Future.microtask(_connect);
 
-    // 页面加载完自动连一次
-    Future.microtask(() {
-      _connect();
+    // 🔥 监听系统播放器关闭事件（全局可接收）
+    _playerExitSub = SystemVideoPlayer.onPlayerExit.listen((_) {
+      appLogger.i("🔥 HomePage 收到系统播放器关闭事件");
+
+      // 这里就是系统播放器关闭后的处理逻辑
+      // 例如继续播放下一条任务
+      _setStatus(DeviceStatus.idle);
+
+      if (_taskQueue.isNotEmpty) {
+        appLogger.i('自动播放下一条');
+        _playNextFromQueue(); // 自动播放下一条
+      } else {
+        _append('【播放完成】任务队列全部完成');
+        // 在这儿调取报告接口
+        _generateReport();
+      }
     });
   }
 
   @override
   void dispose() {
-    _player?.dispose();
+    _playerExitSub?.cancel();
     _ws.close();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    final connected = _ws.isConnected;
+    final bool connected = _ws.isConnected;
+
     return Scaffold(
-      // appBar: AppBar(title: const Text('测试')),
-      body: Padding(
-        padding: const EdgeInsets.all(16),
-        child: Center(
-          child: Text(
-            _statusText,
-            style: const TextStyle(color: Color(0xFFCC6633), fontSize: 20),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.all(16),
+          child: Column(
+            children: <Widget>[
+              const SizedBox(height: 8),
+
+              // 头部：显示 设备编号 + 复制按钮
+              Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: <Widget>[
+                  const Text(
+                    '设备编号：',
+                    style: TextStyle(fontWeight: FontWeight.w600),
+                  ),
+                  const SizedBox(width: 8),
+                  Expanded(
+                    child: SelectableText(
+                      _androidId ?? '（未获取）',
+                      style: const TextStyle(fontSize: 13),
+                    ),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.copy),
+                    onPressed:
+                        _androidId == null || _androidId!.isEmpty
+                            ? null
+                            : () async {
+                              await Clipboard.setData(
+                                ClipboardData(text: _androidId!),
+                              );
+
+                              if (!mounted) {
+                                return;
+                              }
+
+                              // 先关掉上一个，避免叠加
+                              ScaffoldMessenger.of(
+                                context,
+                              ).hideCurrentSnackBar();
+
+                              ScaffoldMessenger.of(context).showSnackBar(
+                                SnackBar(
+                                  behavior: SnackBarBehavior.floating,
+                                  backgroundColor: Colors.transparent,
+                                  elevation: 0,
+                                  margin: const EdgeInsets.symmetric(
+                                    horizontal: 24,
+                                    vertical: 16,
+                                  ),
+                                  content: Container(
+                                    padding: const EdgeInsets.symmetric(
+                                      horizontal: 16,
+                                      vertical: 10,
+                                    ),
+                                    decoration: BoxDecoration(
+                                      color:
+                                          Theme.of(
+                                            context,
+                                          ).colorScheme.inverseSurface,
+                                      borderRadius: BorderRadius.circular(12),
+                                      boxShadow: [
+                                        BoxShadow(
+                                          blurRadius: 12,
+                                          offset: const Offset(0, 4),
+                                          color: Colors.black.withOpacity(0.15),
+                                        ),
+                                      ],
+                                    ),
+                                    child: Row(
+                                      mainAxisSize: MainAxisSize.max,
+                                      children: [
+                                        Icon(
+                                          Icons.check_circle_rounded,
+                                          size: 18,
+                                          color:
+                                              Theme.of(
+                                                context,
+                                              ).colorScheme.onInverseSurface,
+                                        ),
+                                        const SizedBox(width: 8),
+                                        Expanded(
+                                          child: Text(
+                                            '已复制设备编号',
+                                            style: TextStyle(
+                                              fontSize: 14,
+                                              color:
+                                                  Theme.of(context)
+                                                      .colorScheme
+                                                      .onInverseSurface,
+                                            ),
+                                            maxLines: 2,
+                                            overflow: TextOverflow.ellipsis,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                  ),
+                                  duration: const Duration(seconds: 2),
+                                ),
+                              );
+                            },
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 24),
+
+              // 中部：状态文案，垂直水平居中
+              Expanded(
+                child: Center(
+                  child: Text(
+                    _statusText,
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(
+                      color: Color(0xFFCC6633),
+                      fontSize: 20,
+                    ),
+                  ),
+                ),
+              ),
+
+              // 底部按钮区（可自动换行）
+              Wrap(
+                alignment: WrapAlignment.center,
+                spacing: 12,
+                runSpacing: 12,
+                children: <Widget>[
+                  // 连接 / 已连接
+                  FilledButton(
+                    onPressed: connected ? null : _connect,
+                    child: Text(connected ? '已连接' : '连接'),
+                  ),
+
+                  // 播放 / 播放进度（1/3）
+                  FilledButton.tonal(
+                    onPressed: _taskQueue.isEmpty ? null : _playNextFromQueue,
+                    child: Text(_playButtonText),
+                  ),
+
+                  // 断开
+                  TextButton(
+                    onPressed: connected ? _disconnect : null,
+                    child: const Text('断开'),
+                  ),
+                ],
+              ),
+
+              const SizedBox(height: 24),
+            ],
           ),
         ),
       ),
