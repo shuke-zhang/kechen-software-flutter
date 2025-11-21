@@ -1,23 +1,18 @@
-import 'dart:convert';
 import 'package:dio/dio.dart';
 import '../core/network/dio_client.dart';
 
-/// 像 Vue 的 /api 模块一样，集中管理接口
 class HomeApi {
-  HomeApi._();
-  static final HomeApi _i = HomeApi._();
-  factory HomeApi() => _i;
+  static final Dio _req = Request().dio;
 
-  final Dio request = Request().dio;
-
-  /// 示例：获取“今天的天气”或任意测试接口
-  /// 把 '/api/hello' 换成你的真实后端路径，比如：'/weather/today'
-  Future<String> fetchTodayWeather({Map<String, dynamic>? query}) async {
-    final Response res = await request.get(
-      '/api/user/login',
-      queryParameters: query,
+  /// 生成报告（设备端）
+  static Future<Map<String, dynamic>> generateReport({
+    required String treatId,
+  }) async {
+    final res = await _req.get(
+      '/api/videoTreat/addReport',
+      queryParameters: {'treatId': treatId},
     );
-    // 格式化成漂亮的 JSON 字符串
-    return const JsonEncoder.withIndent('  ').convert(res.data);
+
+    return res.data as Map<String, dynamic>;
   }
 }

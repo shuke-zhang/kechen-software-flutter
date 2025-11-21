@@ -3,7 +3,6 @@
 import 'dart:async';
 import 'dart:convert';
 
-import 'package:dio/dio.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -11,6 +10,7 @@ import 'package:kechen_software_flutter/api/ws_service.dart';
 import 'package:kechen_software_flutter/utils/device_id.dart';
 import 'package:kechen_software_flutter/core/log/app_logger.dart';
 import 'package:kechen_software_flutter/core/player/system_video_player.dart';
+import 'package:kechen_software_flutter/api/home_api.dart';
 
 /// 设备状态
 /// - notConnected 初始状态：还没开始连服务器（默认值）
@@ -62,6 +62,9 @@ class _HomePageState extends State<HomePage> {
   static const String _wsUrl = 'ws://192.168.3.22:11020/ws/device';
 
   String? _androidId;
+
+  /// 当前生成订单号
+  String _treatId = '';
 
   /// 当前设备状态（默认：未连接）
   DeviceStatus _deviceStatus = DeviceStatus.notConnected;
@@ -167,6 +170,8 @@ class _HomePageState extends State<HomePage> {
 
         final Map<String, dynamic>? data = msg['data'] as Map<String, dynamic>?;
         final String rawUrls = data?['videoUrls'] as String? ?? '';
+        appLogger.i("获取到单号id ${msg['data']['treatId']}");
+        _treatId = msg['data']?['treatId']?.toString() ?? '';
 
         final List<String> urls =
             rawUrls
@@ -247,7 +252,7 @@ class _HomePageState extends State<HomePage> {
     final String msg = jsonEncode(payload);
     _ws.send(msg);
 
-    _append('【=>】register: $msg');
+    _append('发送注册设备信息... $msg');
   }
 
   /// 主动断开
@@ -273,9 +278,7 @@ class _HomePageState extends State<HomePage> {
     appLogger.i('使用系统播放器播放：$url');
 
     try {
-      await SystemVideoPlayer.open(
-        'http://192.168.3.174:8080/chat-screensaver-safe-1.mp4',
-      );
+      await SystemVideoPlayer.open(url);
     } catch (e, s) {
       appLogger.e('打开系统播放器失败', error: e, stackTrace: s);
       _append('【视频错误】打开系统播放器失败：$e');
@@ -283,28 +286,20 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
-  /// 生成报告（调用后端接口）
+  /// 生成报告
   Future<void> _generateReport() async {
+    if (_treatId.isEmpty) {
+      appLogger.d('_treatId为空你个憨包');
+      return;
+    }
     try {
       appLogger.i('开始请求生成报告接口');
 
-      // TODO: 把下面这个 URL 换成你自己后端的地址
-      const String apiUrl = 'http://192.168.3.22:11020/api/report/generate';
+      final result = await HomeApi.generateReport(treatId: _treatId);
 
-      final Dio dio = Dio();
+      appLogger.i('报告生成接口返回: $result');
 
-      final String id = _androidId ?? '';
-
-      final Response<dynamic> res = await dio.post<dynamic>(
-        apiUrl,
-        data: <String, dynamic>{'deviceId': id},
-      );
-
-      appLogger.i('报告生成接口返回: ${res.data}');
-
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       ScaffoldMessenger.of(
         context,
@@ -312,9 +307,7 @@ class _HomePageState extends State<HomePage> {
     } catch (e, s) {
       appLogger.e('生成报告失败', error: e, stackTrace: s);
 
-      if (!mounted) {
-        return;
-      }
+      if (!mounted) return;
 
       ScaffoldMessenger.of(
         context,
@@ -480,32 +473,6 @@ class _HomePageState extends State<HomePage> {
                     ),
                   ),
                 ),
-              ),
-
-              // 底部按钮区（可自动换行）
-              Wrap(
-                alignment: WrapAlignment.center,
-                spacing: 12,
-                runSpacing: 12,
-                children: <Widget>[
-                  // 连接 / 已连接
-                  FilledButton(
-                    onPressed: connected ? null : _connect,
-                    child: Text(connected ? '已连接' : '连接'),
-                  ),
-
-                  // 播放 / 播放进度（1/3）
-                  FilledButton.tonal(
-                    onPressed: _taskQueue.isEmpty ? null : _playNextFromQueue,
-                    child: Text(_playButtonText),
-                  ),
-
-                  // 断开
-                  TextButton(
-                    onPressed: connected ? _disconnect : null,
-                    child: const Text('断开'),
-                  ),
-                ],
               ),
 
               const SizedBox(height: 24),
