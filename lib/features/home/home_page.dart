@@ -66,6 +66,15 @@ class _HomePageState extends State<HomePage> {
   /// 当前生成订单号
   String _treatId = '';
 
+  String _log = '日志开始\n';
+
+  /// 日志追加
+  void _appendLog(String s) {
+    setState(() {
+      _log += '$s\n';
+    });
+  }
+
   /// 当前设备状态（默认：未连接）
   DeviceStatus _deviceStatus = DeviceStatus.notConnected;
 
@@ -128,6 +137,7 @@ class _HomePageState extends State<HomePage> {
   /// 日志追加（目前主要打到 logger）
   void _append(String s) {
     appLogger.d(s);
+    _appendLog(s);
   }
 
   /// 获取 ANDROID_ID（用你封装的 getAndroidId）
@@ -219,6 +229,7 @@ class _HomePageState extends State<HomePage> {
       onConnecting: () {
         _append('🛜 已发起连接');
         appLogger.i('🛜 已发起连接');
+
         _setStatus(DeviceStatus.connecting);
       },
       onConnected: () async {
@@ -315,11 +326,22 @@ class _HomePageState extends State<HomePage> {
     }
   }
 
+  void _test() async {
+    try {
+      final res = await HomeApi.generateReport(treatId: '1');
+      _append('generateReport请求成功 $res');
+    } catch (e) {
+      _append('generateReport请求失败');
+    }
+  }
+
   StreamSubscription? _playerExitSub;
   @override
   void initState() {
     super.initState();
     _ensureAndroidId();
+    _appendLog('initState触发');
+
     Future.microtask(_connect);
 
     // 🔥 监听系统播放器关闭事件（全局可接收）
@@ -464,17 +486,31 @@ class _HomePageState extends State<HomePage> {
               // 中部：状态文案，垂直水平居中
               Expanded(
                 child: Center(
-                  child: Text(
-                    _statusText,
-                    textAlign: TextAlign.center,
-                    style: const TextStyle(
-                      color: Color(0xFFCC6633),
-                      fontSize: 20,
-                    ),
+                  child: Row(
+                    children: [
+                      Text(
+                        _statusText,
+                        textAlign: TextAlign.center,
+                        style: const TextStyle(
+                          color: Color(0xFFCC6633),
+                          fontSize: 20,
+                        ),
+                      ),
+                      // TextButton(onPressed: _test, child: const Text('测试按钮')),
+                      // ButtonBarTheme(data: data, child: child)
+                    ],
                   ),
                 ),
               ),
 
+              // Expanded(
+              //   child: SingleChildScrollView(
+              //     child: SelectableText(
+              //       _log,
+              //       style: const TextStyle(fontSize: 13),
+              //     ),
+              //   ),
+              // ),
               const SizedBox(height: 24),
             ],
           ),
