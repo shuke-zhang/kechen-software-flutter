@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'app.dart';
+import 'env/env.dart';
 
 void main() {
   WidgetsFlutterBinding.ensureInitialized();
-  const env = String.fromEnvironment('ENV', defaultValue: 'DEV');
-  runApp(MyApp(envLabel: env));
+  runApp(MyApp(envLabel: Env.label));
 }

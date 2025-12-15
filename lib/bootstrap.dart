@@ -3,7 +3,6 @@ import 'package:flutter/material.dart';
 import 'package:flutter_dotenv/flutter_dotenv.dart';
 import 'core/config/app_config.dart';
 import 'core/logging/app_logger.dart';
-import 'app.dart';
 
 Future<void> bootstrap(
   FutureOr<Widget> Function() builder, {

@@ -2,6 +2,7 @@
 
 import 'dart:async';
 import 'dart:convert';
+import 'package:kechen_software_flutter/env/env.dart';
 
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -179,12 +180,23 @@ class _HomePageState extends State<HomePage> {
         appLogger.i('视频下发成功');
 
         final Map<String, dynamic>? data = msg['data'] as Map<String, dynamic>?;
+        final String? rawUrl = data?['videoUrls'] as String?;
+
+        final String videoUrls =
+            rawUrl == null
+                ? ''
+                : rawUrl.startsWith('http')
+                ? rawUrl
+                : '${Env.apiBase}/upload/$rawUrl';
+
         final String rawUrls = data?['videoUrls'] as String? ?? '';
         appLogger.i("获取到单号id ${msg['data']['treatId']}");
+        appLogger.i("videoUrls $videoUrls $Env.apiBase");
+        appLogger.i(Env.apiBase);
         _treatId = msg['data']?['treatId']?.toString() ?? '';
 
         final List<String> urls =
-            rawUrls
+            videoUrls
                 .split(',')
                 .map((String e) => e.trim())
                 .where((String e) => e.isNotEmpty)
@@ -358,7 +370,7 @@ class _HomePageState extends State<HomePage> {
       } else {
         _append('【播放完成】任务队列全部完成');
         // 在这儿调取报告接口
-        _generateReport();
+        // _generateReport();
       }
     });
   }

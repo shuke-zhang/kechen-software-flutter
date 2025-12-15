@@ -1,12 +1,13 @@
 import 'package:dio/dio.dart';
 import 'package:dio/io.dart';
 import 'package:kechen_software_flutter/core/log/app_logger.dart';
+import 'package:kechen_software_flutter/env/env.dart';
 
 /// 使用 --dart-define 覆盖：
 /// flutter run -t lib/main_dev.dart --dart-define=API_BASE=http://192.168.3.22:5000
 const String _kApiBase = String.fromEnvironment(
   'API_BASE',
-  defaultValue: 'http://192.168.3.22:11020',
+  defaultValue: Env.apiBase,
 );
 
 class Request {
