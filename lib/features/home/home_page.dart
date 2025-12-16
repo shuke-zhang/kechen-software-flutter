@@ -181,7 +181,11 @@ class _HomePageState extends State<HomePage> {
 
         final Map<String, dynamic>? data = msg['data'] as Map<String, dynamic>?;
         final String? rawUrl = data?['videoUrls'] as String?;
-
+        final bool isCurrentDevice = data?['deviceId'].toString() == _androidId;
+        if (!isCurrentDevice) {
+          appLogger.i('检测到不是当前设备自动退出');
+          return;
+        }
         final String videoUrls =
             rawUrl == null
                 ? ''
